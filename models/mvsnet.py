@@ -42,19 +42,28 @@ class CostRegNet(nn.Module):
         self.conv6 = ConvBnReLU3D(64, 64)
 
         self.conv7 = nn.Sequential(
-            nn.ConvTranspose3d(64, 32, kernel_size=3, padding=1, output_padding=1, stride=2, bias=False),
+            nn.ConvTranspose3d(
+                64, 32, kernel_size=3, padding=1, output_padding=1, stride=2, bias=False
+            ),
             nn.BatchNorm3d(32),
-            nn.ReLU(inplace=True))
+            nn.ReLU(inplace=True),
+        )
 
         self.conv9 = nn.Sequential(
-            nn.ConvTranspose3d(32, 16, kernel_size=3, padding=1, output_padding=1, stride=2, bias=False),
+            nn.ConvTranspose3d(
+                32, 16, kernel_size=3, padding=1, output_padding=1, stride=2, bias=False
+            ),
             nn.BatchNorm3d(16),
-            nn.ReLU(inplace=True))
+            nn.ReLU(inplace=True),
+        )
 
         self.conv11 = nn.Sequential(
-            nn.ConvTranspose3d(16, 8, kernel_size=3, padding=1, output_padding=1, stride=2, bias=False),
+            nn.ConvTranspose3d(
+                16, 8, kernel_size=3, padding=1, output_padding=1, stride=2, bias=False
+            ),
             nn.BatchNorm3d(8),
-            nn.ReLU(inplace=True))
+            nn.ReLU(inplace=True),
+        )
 
         self.prob = nn.Conv3d(8, 1, 3, stride=1, padding=1)
 
@@ -73,10 +82,10 @@ class CostRegNet(nn.Module):
 class RefineNet(nn.Module):
     def __init__(self):
         super(RefineNet, self).__init__()
-        self.conv1 = ConvBnReLU(4, 32)
+        self.conv1 = ConvBnReLU(4, 32)   # Image 3C + depth map 1C
         self.conv2 = ConvBnReLU(32, 32)
         self.conv3 = ConvBnReLU(32, 32)
-        self.res = ConvBnReLU(32, 1)
+        self.res = ConvBnReLU(32, 1)   # residual depth map 1C same as depth map
 
     def forward(self, img, depth_init):
         concat = F.cat((img, depth_init), dim=1)
@@ -90,45 +99,54 @@ class MVSNet(nn.Module):
         super(MVSNet, self).__init__()
         self.refine = refine
 
-        self.feature = FeatureNet()
-        self.cost_regularization = CostRegNet()
+        self.feature = FeatureNet()   # feature extraction network, 2D CNN
+        self.cost_regularization = CostRegNet()   # cost volume regularization network, 3DCNN
         if self.refine:
             self.refine_network = RefineNet()
 
     def forward(self, imgs, proj_matrices, depth_values):
+        # imgs: [B, N, 3, H, W -> tuple(N, B, 3, H, W)
         imgs = torch.unbind(imgs, 1)
+        # proj_matrices: [B, N, 4, 4] -> tuple(N, B, 4, 4)
         proj_matrices = torch.unbind(proj_matrices, 1)
-        assert len(imgs) == len(proj_matrices), "Different number of images and projection matrices"
+        assert len(imgs) == len(
+            proj_matrices
+        ), "Different number of images and projection matrices"
         img_height, img_width = imgs[0].shape[2], imgs[0].shape[3]
         num_depth = depth_values.shape[1]
         num_views = len(imgs)
 
         # step 1. feature extraction
-        # in: images; out: 32-channel feature maps
+        # img: (B, 3, H, W),  feature: (B, 32, H/4, W/4)
         features = [self.feature(img) for img in imgs]
         ref_feature, src_features = features[0], features[1:]
         ref_proj, src_projs = proj_matrices[0], proj_matrices[1:]
 
-        # step 2. differentiable homograph, build cost volume
+        # step 2. build cost volume using differentiable homography, assume ref features at every depth
+        # (B, 32, H/4, W/4) -> (B, 32, 1, H/4, W/4) -> (B, 32, 192, H/4, W/4)
         ref_volume = ref_feature.unsqueeze(2).repeat(1, 1, num_depth, 1, 1)
         volume_sum = ref_volume
-        volume_sq_sum = ref_volume ** 2
+        volume_sq_sum = ref_volume**2
         del ref_volume
         for src_fea, src_proj in zip(src_features, src_projs):
-            # warpped features
+            # warped_volume: (B, 32, D, H/4, W/4)
             warped_volume = homo_warping(src_fea, src_proj, ref_proj, depth_values)
             if self.training:
                 volume_sum = volume_sum + warped_volume
-                volume_sq_sum = volume_sq_sum + warped_volume ** 2
+                volume_sq_sum = volume_sq_sum + warped_volume**2
             else:
                 # TODO: this is only a temporal solution to save memory, better way?
                 volume_sum += warped_volume
-                volume_sq_sum += warped_volume.pow_(2)  # the memory of warped_volume has been modified
+                volume_sq_sum += warped_volume.pow_(
+                    2
+                )  # the memory of warped_volume has been modified
             del warped_volume
         # aggregate multiple feature volumes by variance
-        volume_variance = volume_sq_sum.div_(num_views).sub_(volume_sum.div_(num_views).pow_(2))
+        volume_variance = volume_sq_sum.div_(num_views).sub_(
+            volume_sum.div_(num_views).pow_(2)
+        )
 
-        # step 3. cost volume regularization
+        # step 3. cost volume regularization (1, 1, 192, 296, 400)
         cost_reg = self.cost_regularization(volume_variance)
         # cost_reg = F.upsample(cost_reg, [num_depth * 4, img_height, img_width], mode='trilinear')
         cost_reg = cost_reg.squeeze(1)
@@ -137,16 +155,32 @@ class MVSNet(nn.Module):
 
         with torch.no_grad():
             # photometric confidence
-            prob_volume_sum4 = 4 * F.avg_pool3d(F.pad(prob_volume.unsqueeze(1), pad=(0, 0, 0, 0, 1, 2)), (4, 1, 1), stride=1, padding=0).squeeze(1)
-            depth_index = depth_regression(prob_volume, depth_values=torch.arange(num_depth, device=prob_volume.device, dtype=torch.float)).long()
-            photometric_confidence = torch.gather(prob_volume_sum4, 1, depth_index.unsqueeze(1)).squeeze(1)
+            prob_volume_sum4 = 4 * F.avg_pool3d(
+                F.pad(prob_volume.unsqueeze(1), pad=(0, 0, 0, 0, 1, 2)),
+                (4, 1, 1),
+                stride=1,
+                padding=0,
+            ).squeeze(1)
+            depth_index = depth_regression(
+                prob_volume,
+                depth_values=torch.arange(
+                    num_depth, device=prob_volume.device, dtype=torch.float
+                ),
+            ).long()
+            photometric_confidence = torch.gather(
+                prob_volume_sum4, 1, depth_index.unsqueeze(1)
+            ).squeeze(1)
 
         # step 4. depth map refinement
         if not self.refine:
             return {"depth": depth, "photometric_confidence": photometric_confidence}
         else:
             refined_depth = self.refine_network(torch.cat((imgs[0], depth), 1))
-            return {"depth": depth, "refined_depth": refined_depth, "photometric_confidence": photometric_confidence}
+            return {
+                "depth": depth,
+                "refined_depth": refined_depth,
+                "photometric_confidence": photometric_confidence,
+            }
 
 
 def mvsnet_loss(depth_est, depth_gt, mask):

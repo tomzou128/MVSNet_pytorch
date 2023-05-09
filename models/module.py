@@ -6,7 +6,14 @@ import torch.nn.functional as F
 class ConvBnReLU(nn.Module):
     def __init__(self, in_channels, out_channels, kernel_size=3, stride=1, pad=1):
         super(ConvBnReLU, self).__init__()
-        self.conv = nn.Conv2d(in_channels, out_channels, kernel_size, stride=stride, padding=pad, bias=False)
+        self.conv = nn.Conv2d(
+            in_channels,
+            out_channels,
+            kernel_size,
+            stride=stride,
+            padding=pad,
+            bias=False,
+        )
         self.bn = nn.BatchNorm2d(out_channels)
 
     def forward(self, x):
@@ -16,7 +23,14 @@ class ConvBnReLU(nn.Module):
 class ConvBn(nn.Module):
     def __init__(self, in_channels, out_channels, kernel_size=3, stride=1, pad=1):
         super(ConvBn, self).__init__()
-        self.conv = nn.Conv2d(in_channels, out_channels, kernel_size, stride=stride, padding=pad, bias=False)
+        self.conv = nn.Conv2d(
+            in_channels,
+            out_channels,
+            kernel_size,
+            stride=stride,
+            padding=pad,
+            bias=False,
+        )
         self.bn = nn.BatchNorm2d(out_channels)
 
     def forward(self, x):
@@ -26,7 +40,14 @@ class ConvBn(nn.Module):
 class ConvBnReLU3D(nn.Module):
     def __init__(self, in_channels, out_channels, kernel_size=3, stride=1, pad=1):
         super(ConvBnReLU3D, self).__init__()
-        self.conv = nn.Conv3d(in_channels, out_channels, kernel_size, stride=stride, padding=pad, bias=False)
+        self.conv = nn.Conv3d(
+            in_channels,
+            out_channels,
+            kernel_size,
+            stride=stride,
+            padding=pad,
+            bias=False,
+        )
         self.bn = nn.BatchNorm3d(out_channels)
 
     def forward(self, x):
@@ -36,7 +57,14 @@ class ConvBnReLU3D(nn.Module):
 class ConvBn3D(nn.Module):
     def __init__(self, in_channels, out_channels, kernel_size=3, stride=1, pad=1):
         super(ConvBn3D, self).__init__()
-        self.conv = nn.Conv3d(in_channels, out_channels, kernel_size, stride=stride, padding=pad, bias=False)
+        self.conv = nn.Conv3d(
+            in_channels,
+            out_channels,
+            kernel_size,
+            stride=stride,
+            padding=pad,
+            bias=False,
+        )
         self.bn = nn.BatchNorm3d(out_channels)
 
     def forward(self, x):
@@ -73,17 +101,35 @@ class Hourglass3d(nn.Module):
         self.conv2b = ConvBnReLU3D(channels * 4, channels * 4, kernel_size=3, stride=1, pad=1)
 
         self.dconv2 = nn.Sequential(
-            nn.ConvTranspose3d(channels * 4, channels * 2, kernel_size=3, padding=1, output_padding=1, stride=2,
-                               bias=False),
-            nn.BatchNorm3d(channels * 2))
+            nn.ConvTranspose3d(
+                channels * 4,
+                channels * 2,
+                kernel_size=3,
+                padding=1,
+                output_padding=1,
+                stride=2,
+                bias=False,
+            ),
+            nn.BatchNorm3d(channels * 2),
+        )
 
         self.dconv1 = nn.Sequential(
-            nn.ConvTranspose3d(channels * 2, channels, kernel_size=3, padding=1, output_padding=1, stride=2,
-                               bias=False),
-            nn.BatchNorm3d(channels))
+            nn.ConvTranspose3d(
+                channels * 2,
+                channels,
+                kernel_size=3,
+                padding=1,
+                output_padding=1,
+                stride=2,
+                bias=False,
+            ),
+            nn.BatchNorm3d(channels),
+        )
 
         self.redir1 = ConvBn3D(channels, channels, kernel_size=1, stride=1, pad=0)
-        self.redir2 = ConvBn3D(channels * 2, channels * 2, kernel_size=1, stride=1, pad=0)
+        self.redir2 = ConvBn3D(
+            channels * 2, channels * 2, kernel_size=1, stride=1, pad=0
+        )
 
     def forward(self, x):
         conv1 = self.conv1b(self.conv1a(x))
@@ -94,38 +140,63 @@ class Hourglass3d(nn.Module):
 
 
 def homo_warping(src_fea, src_proj, ref_proj, depth_values):
-    # src_fea: [B, C, H, W]
-    # src_proj: [B, 4, 4]
-    # ref_proj: [B, 4, 4]
-    # depth_values: [B, Ndepth]
+    # src_fea: [B, C, H, W]， src_proj: [B, 4, 4]
+    # ref_proj: [B, 4, 4], depth_values: [B, Ndepth]
     # out: [B, C, Ndepth, H, W]
     batch, channels = src_fea.shape[0], src_fea.shape[1]
     num_depth = depth_values.shape[1]
     height, width = src_fea.shape[2], src_fea.shape[3]
 
     with torch.no_grad():
+        # all intrinsic matrices K are the same, proj: from ref image plane to src image plane
+        # src_proj = K @ src_ext, (from world to src camera coordinate)
+        # ref_proj = K @ ref_ext, (from world to ref camera coordinate)
         proj = torch.matmul(src_proj, torch.inverse(ref_proj))
-        rot = proj[:, :3, :3]  # [B,3,3]
-        trans = proj[:, :3, 3:4]  # [B,3,1]
+        rot = proj[:, :3, :3]  # [B, 3, 3]
+        trans = proj[:, :3, 3:4]  # [B, 3, 1]
 
-        y, x = torch.meshgrid([torch.arange(0, height, dtype=torch.float32, device=src_fea.device),
-                               torch.arange(0, width, dtype=torch.float32, device=src_fea.device)])
+        # y: [H, W], x: [H, W], init xy coordinate grid on reference image
+        y, x = torch.meshgrid(
+            [
+                torch.arange(0, height, dtype=torch.float32, device=src_fea.device),
+                torch.arange(0, width, dtype=torch.float32, device=src_fea.device),
+            ]
+        )
         y, x = y.contiguous(), x.contiguous()
         y, x = y.view(height * width), x.view(height * width)
-        xyz = torch.stack((x, y, torch.ones_like(x)))  # [3, H*W]
-        xyz = torch.unsqueeze(xyz, 0).repeat(batch, 1, 1)  # [B, 3, H*W]
-        rot_xyz = torch.matmul(rot, xyz)  # [B, 3, H*W]
-        rot_depth_xyz = rot_xyz.unsqueeze(2).repeat(1, 1, num_depth, 1) * depth_values.view(batch, 1, num_depth,
-                                                                                            1)  # [B, 3, Ndepth, H*W]
-        proj_xyz = rot_depth_xyz + trans.view(batch, 3, 1, 1)  # [B, 3, Ndepth, H*W]
-        proj_xy = proj_xyz[:, :2, :, :] / proj_xyz[:, 2:3, :, :]  # [B, 2, Ndepth, H*W]
+        # xyz: [3, H*W], generate all homogeneous coordinate for reference image, total H*W pixels, each 3 dimension.
+        xyz = torch.stack((x, y, torch.ones_like(x)))
+        # xyz: [B, 3, H*W]
+        xyz = torch.unsqueeze(xyz, 0).repeat(batch, 1, 1)
+        # rot_xyz: [B, 3, H*W], apply rotation to reference image's coordinates
+        rot_xyz = torch.matmul(rot, xyz)
+
+        # rot_depth_xyz: [B, 3, Ndepth, H*W], dot with the normal vector of the depth planes
+        rot_depth_xyz = rot_xyz.unsqueeze(2).repeat(
+            1, 1, num_depth, 1
+        ) * depth_values.view(batch, 1, num_depth, 1)
+
+        # proj_xyz: [B, 3, Ndepth, H*W], apply translation
+        proj_xyz = rot_depth_xyz + trans.view(batch, 3, 1, 1)
+
+        # proj_xy: [B, 2, Ndepth, H*W], divide by last element of homogenous coordinate, convert back to xy coordinate on source image plane.
+        proj_xy = proj_xyz[:, :2, :, :] / proj_xyz[:, 2:3, :, :]
+
+        # [B, Ndepth, H*W], Normalize to decimal, can outside [-1, 1].
         proj_x_normalized = proj_xy[:, 0, :, :] / ((width - 1) / 2) - 1
         proj_y_normalized = proj_xy[:, 1, :, :] / ((height - 1) / 2) - 1
-        proj_xy = torch.stack((proj_x_normalized, proj_y_normalized), dim=3)  # [B, Ndepth, H*W, 2]
+
+        # proj_xy: [B, Ndepth, H*W, 2]
+        proj_xy = torch.stack((proj_x_normalized, proj_y_normalized), dim=3)
+        # grid[0, 0, 0, :], the src feature coordinate at first depth for first pixel.
         grid = proj_xy
 
-    warped_src_fea = F.grid_sample(src_fea, grid.view(batch, num_depth * height, width, 2), mode='bilinear',
-                                   padding_mode='zeros')
+    warped_src_fea = F.grid_sample(
+        src_fea,
+        grid.view(batch, num_depth * height, width, 2),  # cubic, so need to combine two dimension
+        mode="bilinear",
+        padding_mode="zeros",
+    )
     warped_src_fea = warped_src_fea.view(batch, channels, num_depth, height, width)
 
     return warped_src_fea
@@ -147,8 +218,13 @@ if __name__ == "__main__":
     import cv2
 
     MVSDataset = find_dataset_def("dtu_yao")
-    dataset = MVSDataset("/home/xyguo/dataset/dtu_mvs/processed/mvs_training/dtu/", '../lists/dtu/train.txt', 'train',
-                         3, 256)
+    dataset = MVSDataset(
+        "/home/xyguo/dataset/dtu_mvs/processed/mvs_training/dtu/",
+        "../lists/dtu/train.txt",
+        "train",
+        3,
+        256,
+    )
     dataloader = DataLoader(dataset, batch_size=2)
     item = next(iter(dataloader))
 
@@ -165,13 +241,19 @@ if __name__ == "__main__":
 
     warped_imgs = homo_warping(src_imgs[0], src_projs[0], ref_proj, depth_values)
 
-    cv2.imwrite('../tmp/ref.png', ref_img.permute([0, 2, 3, 1])[0].detach().cpu().numpy()[:, :, ::-1] * 255)
-    cv2.imwrite('../tmp/src.png', src_imgs[0].permute([0, 2, 3, 1])[0].detach().cpu().numpy()[:, :, ::-1] * 255)
+    cv2.imwrite(
+        "../tmp/ref.png",
+        ref_img.permute([0, 2, 3, 1])[0].detach().cpu().numpy()[:, :, ::-1] * 255,
+    )
+    cv2.imwrite(
+        "../tmp/src.png",
+        src_imgs[0].permute([0, 2, 3, 1])[0].detach().cpu().numpy()[:, :, ::-1] * 255,
+    )
 
     for i in range(warped_imgs.shape[2]):
         warped_img = warped_imgs[:, :, i, :, :].permute([0, 2, 3, 1]).contiguous()
         img_np = warped_img[0].detach().cpu().numpy()
-        cv2.imwrite('../tmp/tmp{}.png'.format(i), img_np[:, :, ::-1] * 255)
+        cv2.imwrite("../tmp/tmp{}.png".format(i), img_np[:, :, ::-1] * 255)
 
 
     # generate gt
@@ -210,4 +292,4 @@ if __name__ == "__main__":
         warped = cv2.remap(src_imgs[0], yy, xx, interpolation=cv2.INTER_LINEAR)
         # warped[mask[:, :] < 0.5] = 0
 
-        cv2.imwrite('../tmp/tmp{}_gt.png'.format(i), warped[:, :, ::-1] * 255)
+        cv2.imwrite("../tmp/tmp{}_gt.png".format(i), warped[:, :, ::-1] * 255)
